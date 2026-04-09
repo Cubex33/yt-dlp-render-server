@@ -1,9 +1,13 @@
 from flask import Flask, request, jsonify
 import yt_dlp
 import os
-import tempfile
 
 app = Flask(__name__)
+
+@app.route('/ping', methods=['GET'])
+def ping():
+    """Эндпоинт для UptimeRobot — чтобы сервер не засыпал"""
+    return "pong"
 
 @app.route('/download', methods=['POST'])
 def download():
@@ -12,7 +16,6 @@ def download():
     if not url:
         return jsonify({'error': 'No URL provided'}), 400
 
-    # Опции с таймаутом и попыткой обхода блокировки
     ydl_opts = {
         'format': 'best[ext=mp4]/best',
         'quiet': True,
@@ -20,8 +23,6 @@ def download():
         'extract_flat': False,
         'force_generic_extractor': False,
         'socket_timeout': 30,
-        'cookiefile': None,  # если понадобится файл куки, можно добавить
-        # Для Instagram можно попробовать добавить заголовки
         'http_headers': {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
