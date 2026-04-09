@@ -6,18 +6,29 @@ app = Flask(__name__)
 
 @app.route('/ping', methods=['GET'])
 def ping():
-    """Эндпоинт для UptimeRobot — чтобы сервер не засыпал"""
     return "pong"
 
 @app.route('/download', methods=['POST'])
 def download():
     data = request.get_json()
     url = data.get('url')
+    quality = data.get('quality', 'max')  # max, 720, 480
+
     if not url:
         return jsonify({'error': 'No URL provided'}), 400
 
+    # Определяем формат в зависимости от качества
+    if quality == 'max':
+        format_str = 'best[ext=mp4]/best'
+    elif quality == '720':
+        format_str = 'best[height<=720][ext=mp4]/best[height<=720]'
+    elif quality == '480':
+        format_str = 'best[height<=480][ext=mp4]/best[height<=480]'
+    else:
+        format_str = 'best[ext=mp4]/best'
+
     ydl_opts = {
-        'format': 'best[ext=mp4]/best',
+        'format': format_str,
         'quiet': True,
         'no_warnings': True,
         'extract_flat': False,
