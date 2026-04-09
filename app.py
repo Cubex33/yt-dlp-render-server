@@ -1,224 +1,60 @@
-const BOT_TOKEN = "8756312112:AAFmynwxYLwp0qoyiRkEVSvrzRVy6gOemFk";
+from flask import Flask, request, jsonify
+import yt_dlp
+import os
 
-// Список бесплатных API (никаких ключей!)
-const API_LIST = [
-  {
-    name: "AllMedia",
-    url: "https://api.allmedia.app/api/download",
-    handler: async (url, quality) => {
-      const resp = await fetch("https://api.allmedia.app/api/download", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url })
-      });
-      const json = await resp.json();
-      return json.url || json.medias?.[0]?.url || json.video || null;
-    }
-  },
-  {
-    name: "Cobalt",
-    url: "https://co.wuk.sh/api/json",
-    handler: async (url, quality) => {
-      const resp = await fetch("https://co.wuk.sh/api/json", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Accept": "application/json",
-          "User-Agent": "Mozilla/5.0"
-        },
-        body: JSON.stringify({
-          url,
-          downloadMode: "auto",
-          videoQuality: quality === "max" ? "1080" : quality,
-          aFormat: "mp4",
-          isNoWatermark: true
-        })
-      });
-      const json = await resp.json();
-      if (json.status === "success" && json.url) return json.url;
-      if (json.url) return json.url;
-      if (json.picker?.[0]?.url) return json.picker[0].url;
-      return null;
-    }
-  },
-  {
-    name: "SnapInsta",
-    handler: async (url, quality) => {
-      // Только для Instagram
-      if (!url.includes("instagram.com")) return null;
-      const snapUrl = `https://snapinsta.app/action.php?url=${encodeURIComponent(url)}`;
-      const resp = await fetch(snapUrl, {
-        headers: { "User-Agent": "Mozilla/5.0" }
-      });
-      const html = await resp.text();
-      const match = html.match(/href="(https:\/\/[^"]*\.(?:mp4|mov)[^"]*)"/i) ||
-                    html.match(/data-video="([^"]+)"/);
-      return match?.[1] || null;
-    }
-  }
-];
+app = Flask(__name__)
 
-export default {
-  async fetch(request) {
-    if (request.method !== "POST") return new Response("OK");
+@app.route('/ping', methods=['GET'])
+def ping():
+    return "pong"
 
-    try {
-      const data = await request.json();
+@app.route('/download', methods=['POST'])
+def download():
+    data = request.get_json()
+    url = data.get('url')
+    quality = data.get('quality', 'max')  # max, 720, 480
 
-      // Обработка нажатия на кнопку качества
-      if (data.callback_query) {
-        await handleCallbackQuery(data.callback_query);
-        return new Response("ok");
-      }
+    if not url:
+        return jsonify({'error': 'No URL provided'}), 400
 
-      if (!data.message) return new Response("ok");
-      const chatId = data.message.chat.id;
-      let text = data.message.text || "";
+    # Определяем формат в зависимости от качества
+    if quality == 'max':
+        format_str = 'best[ext=mp4]/best'
+    elif quality == '720':
+        format_str = 'best[height<=720][ext=mp4]/best[height<=720]'
+    elif quality == '480':
+        format_str = 'best[height<=480][ext=mp4]/best[height<=480]'
+    else:
+        format_str = 'best[ext=mp4]/best'
 
-      // Извлекаем ссылку из entities
-      if (data.message.entities) {
-        for (const ent of data.message.entities) {
-          if (ent.type === "url") {
-            text = text.substring(ent.offset, ent.offset + ent.length);
-            break;
-          }
+    ydl_opts = {
+        'format': format_str,
+        'quiet': True,
+        'no_warnings': True,
+        'extract_flat': False,
+        'force_generic_extractor': False,
+        'socket_timeout': 30,
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         }
-      }
-      text = text.trim();
-
-      if (!text) return new Response("ok");
-
-      if (text === "/start") {
-        await sendMessage(chatId, "🎬 Привет! Отправь ссылку на Reels, TikTok или Shorts — выбери качество и я скачаю через несколько бесплатных сервисов.");
-        return new Response("ok");
-      }
-
-      if (!text.startsWith("http")) {
-        await sendMessage(chatId, "❌ Это не ссылка.");
-        return new Response("ok");
-      }
-
-      // Предлагаем выбрать качество
-      await sendQualityKeyboard(chatId, text);
-
-    } catch (e) {
-      console.error(e);
     }
-    return new Response("ok");
-  }
-};
 
-async function handleCallbackQuery(callbackQuery) {
-  const chatId = callbackQuery.message.chat.id;
-  const messageId = callbackQuery.message.message_id;
-  const data = callbackQuery.data; // формат: "quality|max|https://..."
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            video_url = info.get('url')
+            if not video_url:
+                formats = info.get('formats', [])
+                if formats:
+                    video_url = formats[-1].get('url')
+            if video_url:
+                return jsonify({'url': video_url})
+            else:
+                return jsonify({'error': 'No video URL found'}), 404
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
-  const parts = data.split('|');
-  if (parts.length < 3) return;
-
-  const quality = parts[1];
-  const url = parts.slice(2).join('|');
-
-  await answerCallbackQuery(callbackQuery.id);
-  await editMessageText(chatId, messageId, `⏳ Качество: ${quality}. Пробую скачать через бесплатные API...`);
-
-  // По очереди пробуем все API
-  let videoUrl = null;
-  let usedApi = "";
-
-  for (const api of API_LIST) {
-    try {
-      videoUrl = await api.handler(url, quality);
-      if (videoUrl) {
-        usedApi = api.name;
-        break;
-      }
-    } catch (e) {
-      console.log(`API ${api.name} упал:`, e.message);
-    }
-  }
-
-  if (videoUrl) {
-    await sendMessage(chatId, `✅ Скачано через ${usedApi}! Отправляю видео...`);
-    const result = await sendVideo(chatId, videoUrl);
-    if (!result.ok) {
-      const docRes = await sendDocument(chatId, videoUrl);
-      if (!docRes.ok) {
-        await sendMessage(chatId, `❌ Не удалось отправить файл.\n🔗 Прямая ссылка:\n${videoUrl}`);
-      }
-    }
-  } else {
-    await sendMessage(chatId, "❌ Ни один бесплатный сервис не смог скачать. Возможно, видео удалено или аккаунт приватный.");
-  }
-}
-
-// --- Клавиатура выбора качества ---
-async function sendQualityKeyboard(chatId, url) {
-  const keyboard = {
-    inline_keyboard: [
-      [
-        { text: "🔥 Максимальное", callback_data: `quality|max|${url}` },
-        { text: "📺 720p", callback_data: `quality|720|${url}` }
-      ],
-      [
-        { text: "📱 480p", callback_data: `quality|480|${url}` }
-      ]
-    ]
-  };
-  await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      chat_id: chatId,
-      text: "🎚 Выбери качество видео:",
-      reply_markup: keyboard
-    })
-  });
-}
-
-// --- Telegram API helpers ---
-async function sendMessage(chatId, text) {
-  await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: chatId, text })
-  });
-}
-
-async function editMessageText(chatId, messageId, text) {
-  await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/editMessageText`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: chatId, message_id: messageId, text })
-  });
-}
-
-async function answerCallbackQuery(callbackQueryId) {
-  await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/answerCallbackQuery`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ callback_query_id: callbackQueryId })
-  });
-}
-
-async function sendVideo(chatId, videoUrl) {
-  const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendVideo`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      chat_id: chatId,
-      video: videoUrl,
-      supports_streaming: true
-    })
-  });
-  return await res.json();
-}
-
-async function sendDocument(chatId, docUrl) {
-  const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendDocument`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: chatId, document: docUrl })
-  });
-  return await res.json();
-}
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port)
